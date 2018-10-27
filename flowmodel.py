@@ -106,13 +106,26 @@ class Deck(Space):
 @add_type("grid")
 class Grid(Space):
     stack_limit = 2
+    def __init__(self, *args, **kwargs):
+        super(Grid, self).__init__(*args, **kwargs)
+        self.build_index()
     def add(self, thing, position):
         stack = self.state_dict["rows"][position[1]][position[0]]
         super(Grid,self).add(thing,position)
         stack.append(thing["key"])
+        self.spot_index[thing["key"]] = position
     def remove(self, thing):
-        super(Grid,self).add(thing)
-        self.state_dict["rows"][thing["position"][1]][thing["position"][0]].remove(thing["key"])
+        super(Grid,self).remove(thing)
+        print(thing["position"])
+        position = self.spot_index[thing["key"]]
+        del self.spot_index[thing["key"]]
+        self.state_dict["rows"][position[1]][position[0]].remove(thing["key"])
+    def build_index(self):
+        self.spot_index = {}
+        for ri,row in enumerate(self.state_dict["rows"]):
+            for ci,col in enumerate(row):
+                for card_key in col[1:]:
+                    self.spot_index[card_key] = [ci,ri]
     def rotate(self):
         rows = self.state_dict["rows"]
         print(rows)
@@ -144,6 +157,15 @@ class Grid(Space):
         if left_hand:
             rows[0][0].append(left_hand)
         print("new:",self.state_dict["rows"])
+        self.build_index()
+    def activate(self):
+        target = "player2"
+        for row in self.state_dict["rows"]:
+            for col in row:
+                color,cards = col[0],col[1:]
+                if cards:
+                    self.model.get_object(cards[0]).activate(color,target)
+            target = "player1"
 
 def test_grid():
     d = {
@@ -187,6 +209,9 @@ class Card(Thing):
     def draw(self, space, *args, **kwargs):
         if self.location["type"]!="deck":
             raise InvalidManipulation("You must draw from a deck")
+        if self.model.get_player(self.world["current_player"])["mana"]<=0:
+            raise InvalidManipulation("You have no mana to draw")
+        self.model.get_player(self.world["current_player"])["mana"]-=1
         self.model.move_to_space(self.key, space.key)
     @operation
     def playflow(self, space, spot):
@@ -194,23 +219,51 @@ class Card(Thing):
         spot = [int(x) for x in spot.split(",")]
         if not space.state_dict["type"] == "grid":
             raise InvalidManipulation("You must play a flow onto a grid")
-        if not self.state_dict["card_type"]=="flow":
-            raise InvalidManipulation("You cannot put a non flow card into the flow")
-        stack = space.state_dict["rows"][spot[1]][spot[0]]
-        if len(stack)>=space.stack_limit:
-            raise InvalidManipulation("Stack limit reached")
-        self.model.move_to_space(self.key, space.key, spot)
+        #TODO more distinct card types
+        #if not self.state_dict["card_type"]=="flow":
+        #    raise InvalidManipulation("You cannot put a non flow card into the flow")
+        if self.state_dict["card_type"]=="flow":
+            if self.world["current_player"]=="player1" and spot[1]!=1:
+                raise ImpermissiveManipulation("Play on your side")
+            if self.world["current_player"]=="player2" and spot[1]!=0:
+                raise ImpermissiveManipulation("Play on your side")
+            stack = space.state_dict["rows"][spot[1]][spot[0]]
+            if len(stack)>=space.stack_limit:
+                raise InvalidManipulation("Stack limit reached")
+            self.model.move_to_space(self.key, space.key, spot)
+        elif self.state_dict["card_type"]=="instant":
+            target = {"player1":"player2","player2":"player1"}[self.world["current_player"]]
+            self.activate(self.state_dict["color"],target)
+    def activate(self, color, target):
+        if color!=self.state_dict["color"]:
+            return
+        target = self.model.get_player(target)
+        if self["force"]:
+            target["force"] -= self["force"]
+        self.model.move_to_space(self.key,"purged")
+        self.world.have_winner()
 
 
 @add_type("world")
 class World(Blob):
     @operation
     def end_turn(self, *args):
+        self.model.get_player(self.state_dict["current_player"])["mana"] += 1
         players = ["player1","player2"]
         players.remove(self.state_dict["current_player"])
         self.state_dict["current_player"] = players[0]
         self.model.get_object("flowarea").rotate()
+        self.model.get_object("flowarea").activate()
         self.model.build_index()
+    def have_winner(self):
+        loser = False
+        for player in list(self["players"].values()):
+            if player["force"]<0:
+                player["result"] = "lost"
+                loser = True
+        for player in list(self["players"].values()):
+            if loser and not "result" in player:
+                player["result"] = "won"
 
 @add_type("player")
 class Player(Blob):
@@ -240,7 +293,7 @@ class GameModel(object):
         for p in list(self.state["players"].values()):
             if p["player_key"]==player_key:
                 return p
-        raise Exception("No player",player_key)
+        raise InvalidManipulation("No player "+str(player_key))
     def walk(self):
         for space in self.state["spaces"]:
             loc = makeob(space, self.world, self.world, self)
@@ -303,6 +356,7 @@ def newgame():
         "players":{
         },
         "spaces":[
+            {"key":"purged","type":"hand","player":"none","things":[]},
             {
                 "key":"hand1",
                 "player":"player1",
@@ -346,14 +400,16 @@ def newgame():
     card_key = [0]
     def add_card():
         card_key[0] += 1
-        return {
+        d = {
                     "key": str(card_key[0]),
                     "type": "card",
                     "back": "1",   #Which back to show
                     "color": random.choice(["red","blue","green","black"]),
-                    "card_type": random.choice(["instant","flow","combo"]),
-                    "mana": random.randint(1,3)
+                    "card_type": random.choice(["instant","flow"]),
+                    "mana": random.randint(1,4),
+                    "force": random.randint(2,6)
                 }
+        return d
     m = GameModel(state)
     for player in ["deck1","deck2"]:
         for i in range(30):
