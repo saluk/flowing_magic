@@ -1,0 +1,34 @@
+<MainMenu1>:
+	id: mainmenu
+	size_hint: None, None
+	width: root.width
+	height: root.height
+	pos: 0, root.height-self.height
+
+<EntryField>:
+	size_hint: 1, None
+	height: 50
+	Label:
+		text: root.label
+	TextInput:
+		id: inp
+		text: root.text
+		multiline: False
+		password: root.password
+
+<MenuBoxLayouti1>:
+	orientation: "vertical"
+	pos: 0, root.height-self.minimum_height
+	width: root.width
+	#height: self.minimum_height
+	size_hint: None, None
+	spacing: 10
+
+<MainMenu>:
+	canvas:
+		Rectangle:
+			source: "background2.png"
+			size: self.size
+			pos: self.pos
+	id: mainmenu
+
