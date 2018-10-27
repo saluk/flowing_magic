@@ -97,7 +97,7 @@ def newgame():
         abort(404)
     g = Game(updated=datetime.now(),status="open")
     game = flowmodel.newgame()
-    game.state["players"][str(current_user.id)] = {"user_id":str(current_user.id),"player_key":random.choice(["player1","player2"])}
+    game.add_player(current_user.id)
     g.state = json.dumps(game.state)
     g.users.append(current_user)
     db.session.add(g)
@@ -132,14 +132,11 @@ def join(game_id):
     if len(game.users)>=2:
         return jsonify({"error":"game is full - but we shouldn't get here"})
     state = json.loads(game.state)
-
-    players = ["player1","player2"]
-    existing = list(state["players"].values())[0]["player_key"]
-    players.remove(existing)
-    state["players"][str(current_user.id)] = {"user_id":str(current_user.id),"player_key":players[0]}
+    flowstate = flowmodel.from_state(state)
+    flowstate.add_player(current_user.id)
 
     game.status = "active"
-    game.state = json.dumps(state)
+    game.state = json.dumps(flowstate.state)
     game.users.append(current_user)
     db.session.add(game)
     db.session.commit()
@@ -159,22 +156,19 @@ def concede(game_id):
     return jsonify({"action":"success"})
 
 #TODO make card_id a string in the model
-@app.route('/action/<string:action>/<int:game_id>/<int:card_id>/<string:space_id>')
+@app.route('/action/<string:action>/<int:game_id>/<card_id>/<string:space_id>/<spot>')
 @login_required
-def action(action,game_id,card_id,space_id):
+def action(action,game_id,card_id,space_id,spot):
     game = db.session.query(Game).filter_by(id=game_id).first()
     if current_user not in game.users:
         return jsonify({"error":"user is not in game"})
     state = json.loads(game.state)
     m = flowmodel.GameModel(state)
-    player = None
-    if m.state["players"][str(current_user.id)]["player_key"] != m.state["current_player"]:
-        return jsonify({"error":"it's not your turn"})
+    player = m.state["players"][str(current_user.id)]
     try:
-        m.get_object(card_id).action(action,m.get_object(space_id))
+        m.get_object(card_id).action(player,action,m.get_object(space_id),spot)
     except flowmodel.ModelError as exc:
         return jsonify({"error":"invalid manipulation","message":exc.args,"type":str(type(exc))})
-    m.world.end_turn()
     game.state = json.dumps(m.state)
     game.updated = datetime.now()
     db.session.add(game)
