@@ -29,7 +29,7 @@ import flowmodel as model
 
 import sys
 
-SERVER="http://tinycrease.com:5000"
+#SERVER="http://tinycrease.com:5000"
 SERVER="http://127.0.0.1:5000"
 CARD_SIZE=[200,250]
 DEFAULT_SPEED=0.05
@@ -259,7 +259,7 @@ class GameView(Widget):
             if not data.get("state",None):
                 return
             state = data["state"]
-            print("setting state",state)
+            #print("setting state",state)
             first = False
             if not self.state:
                 first = True
@@ -299,6 +299,10 @@ class GameView(Widget):
         self.play_area = PlayArea(self)
         self.add_sync_widget(self.play_area, {"key":"flowarea"})
 
+        self.purged = Deck(self,pos=[self.size[0]-CARD_SIZE[0],self.size[1]/2])
+        self.purged.faceup = True
+        self.add_sync_widget(self.purged, {"key":"purged"})
+
         self.their_hand = Hand(self,pos=[CARD_SIZE[0],self.size[1]-CARD_SIZE[1]])
         self.your_hand = Hand(self,pos=[CARD_SIZE[0],0],bgcolor=[1,0.5,0.5,1])
         self.add_sync_widget(self.their_hand,{"type":"hand","player":self.their_player})
@@ -310,6 +314,9 @@ class GameView(Widget):
         self.add_sync_widget(self.your_deck, {"type":"deck","player":self.your_player})
 
         self.card_preview = None
+
+        self.player_label = Label(text=self.your_player)
+        self.add_widget(self.player_label)
 
         buttons = [
                 ("Concede",self.root.concede),
@@ -324,10 +331,15 @@ class GameView(Widget):
             self.add_widget(b)
             y-=CARD_SIZE[1]/3
 
-        self.their_mana = Label(text="Mana:",pos=[0,self.size[1]-CARD_SIZE[1]])
-        self.your_mana = Label(text="Mana:",pos=[0,CARD_SIZE[1]])
+        self.their_mana = Label(text="Mana:",pos=[10,self.size[1]-CARD_SIZE[1]])
+        self.your_mana = Label(text="Mana:",pos=[10,CARD_SIZE[1]])
         self.add_widget(self.their_mana)
         self.add_widget(self.your_mana)
+
+        self.their_force = Label(text="Force:",pos=[10,self.size[1]-CARD_SIZE[1]-40])
+        self.your_force = Label(text="Force:",pos=[10,CARD_SIZE[1]+40])
+        self.add_widget(self.their_force)
+        self.add_widget(self.your_force)
 
         self.server_update = Clock.schedule_interval(self.get_server_state,5)
 
@@ -406,6 +418,12 @@ class GameView(Widget):
         for p in list(state["players"].values()):
             prefix = {True: "your_", False:"their_"}[p["player_key"] == self.your_player]
             getattr(self,prefix+"mana").text = "Mana: %s"%p["mana"]
+            getattr(self,prefix+"force").text = "Force: %s"%p["force"]
+            if p["player_key"] == self.your_player and "result" in p and not hasattr(self,"result_label"):
+                result = Label(text="You %s!"%p["result"].capitalize(),x=self.size[0]/2,y=self.size[1]/2,font_size=80)
+                self.add_widget(result)
+                self.result_label = result
+                return
 
         for space in state["spaces"]:
             space_ob = self.find_sync_widget(space, flowmodel)
@@ -480,6 +498,7 @@ class CardSpace(Widget):
         self.resize_card_spacing()
     def resize_card_spacing(self):
         width = len(self.cards)*CARD_SIZE[0]
+        self.cards = [x for x in self.cards if x]
         for card in self.cards:
             card.dest_x = (self.size[0]/2)-width/2+(self.cards.index(card)*CARD_SIZE[0])+CARD_SIZE[0]
             card.dest_y = self.y
@@ -514,6 +533,14 @@ class PlayArea(CardSpace):
         super(PlayArea, self).__init__(*args, **kwargs)
         self.dest_slots = []
         self.space = None
+    def get_reversed_rows(self):
+        rows = [[x for x in r] for r in self.space["rows"]]
+        if self.view.your_player=="player2":
+            rows.reverse()
+            rows[0].reverse()
+            rows[1].reverse()
+            return rows, True
+        return rows, False
     def setup(self):
         if not self.space:
             return
@@ -522,7 +549,8 @@ class PlayArea(CardSpace):
         self.size = [CARD_SIZE[0]*4,CARD_SIZE[1]*2]
         self.pos=[self.view.size[0]/2-self.size[0]/2,self.view.size[1]/2-self.size[1]/2]
         y=CARD_SIZE[1]
-        for ri,row in enumerate(self.space["rows"]):
+        rows,reverse = self.get_reversed_rows()
+        for ri,row in enumerate(rows):
             x=0
             for ci,col in enumerate(row):
                 color,cards = col[0],col[1:]
@@ -531,7 +559,10 @@ class PlayArea(CardSpace):
                 slot = Image(source="art/cardslots/CardSlotClear-%s.png"%(color.capitalize(),),
                         x=self.x+x,y=self.y+y,
                         size=[CARD_SIZE[0]+10,CARD_SIZE[1]+10])
-                slot.col,slot.row = ci,ri
+                if reverse:
+                    slot.col,slot.row = 3-ci,1-ri
+                else:
+                    slot.col,slot.row = ci,ri
                 slot.cards = cards
                 self.add_widget(slot)
                 self.dest_slots.append(slot)
@@ -543,11 +574,19 @@ class PlayArea(CardSpace):
             if card.model_key in slot.cards:
                 return slot
     def resize_card_spacing(self):
+        self.cards = [x for x in self.cards if x]
+        deleted = []
         for card in self.cards:
             slot = self.find_slot(card)
-            card.dest_x = slot.x+10
-            card.dest_y = slot.y+10
-            card.speed = 0.1
+            if slot:
+                card.dest_x = slot.x+10
+                card.dest_y = slot.y+10
+                card.speed = 0.1
+            else:
+                deleted.append(card)
+        for x in deleted:
+            self.remove_card(x)
+        self.cards = [x for x in self.cards if x not in deleted]
     def drop_on(self, card, touch):
         for slot in self.dest_slots:
             if not slot.collide_point(touch.x, touch.y):
@@ -571,11 +610,12 @@ class Hand(CardSpace):
         return self.view.handle_action("draw",card.model_key,self.model_key)
 
 class Deck(CardSpace):
+    faceup=False
     def __init__(self, *args, **kwargs):
         super(Deck, self).__init__(*args, **kwargs)
         self.size = [CARD_SIZE[0]*1.2,CARD_SIZE[1]*1.2]
     def show_card_backs(self):
-        return True
+        return not self.faceup
     def block_cards(self):
         return True
     def resize_card_spacing(self):
@@ -640,12 +680,33 @@ class GameCardPreview(Image):
         if self.thing.get("mana",0)>=0:
             scale = int(0.15*self.width)
             l = Label(text="[b][size=%spx][color=ffffff]%s[/color][/size][/b]"%(scale,self.thing["mana"]),markup=True)
-            def set_pos(ob,pos):
+            def set_pos2(ob,pos):
                 l.pos = [ob.pos[0]+0.25*ob.size[0], ob.pos[1]+0.75*ob.size[1]]
                 l.size = [1,1]
-            set_pos(self,self.pos)
-            self.bind(pos=set_pos)
+            set_pos2(self,self.pos)
+            self.bind(pos=set_pos2)
             self.add_widget(l)
+        if self.thing.get("force",0)>=0:
+            i2 = Image(source="art/icons/Power/IconPower-Red.png",
+                    size=[self.size[0]*0.35,self.size[1]*0.35])
+            def set_pos3(ob,pos):
+                i2.pos = [
+                    ob.pos[0]+0.25*ob.size[0],
+                    ob.pos[1]+0.35*ob.size[1]
+                ]
+            set_pos3(self,self.pos)
+            self.bind(pos=set_pos3)
+            self.add_widget(i2)
+
+            scale = int(0.15*self.width)
+            l2 = Label(text="[b][size=%spx][color=111111]%s[/color][/size][/b]"%(scale,self.thing["force"]),markup=True)
+            def set_pos4(ob,pos):
+                l2.pos = [ob.pos[0]+0.6*ob.size[0], ob.pos[1]+0.55*ob.size[1]]
+                l2.size = [1,1]
+            set_pos4(self,self.pos)
+            self.bind(pos=set_pos4)
+            self.add_widget(l2)
+
 
 
 class GameCard(GameCardPreview):
