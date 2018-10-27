@@ -3,14 +3,10 @@ from flask_login import current_user, login_user
 from flask_security import Security, login_required, \
      SQLAlchemySessionUserDatastore
 from flask_sqlalchemy import SQLAlchemy
-from database import init_db, Base
-from models import User, Role, Game
 from datetime import datetime
 import random
 import json
 import sys
-sys.path.append("..")
-from flowingmagic import flowmodel
 
 # Create app
 app = Flask(__name__)
@@ -21,6 +17,12 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///server.db'
 
 # Setup Flask-Security
 db = SQLAlchemy(app)
+
+from conndb import init_db, Base
+from models import User, Role, Game
+sys.path.append("..")
+import flowmodel
+
 user_datastore = SQLAlchemySessionUserDatastore(db.session,
                                                 User, Role)
 Base.query = db.session.query_property()
@@ -91,7 +93,6 @@ def login_from_client():
 @app.route('/newgame')
 @login_required
 def newgame():
-    reload(flowmodel)
     if [g for g in current_user.games if g.status=="open"]:
         abort(404)
     g = Game(updated=datetime.now(),status="open")
@@ -101,18 +102,21 @@ def newgame():
     g.users.append(current_user)
     db.session.add(g)
     db.session.commit()
-    return redirect(url_for("get_game_state",game_id=g.id))
+    return redirect(url_for("get_game_state",game_id=g.id,last_time=-1))
 
-@app.route('/game/<int:game_id>')
+@app.route('/game/<int:game_id>/<last_time>')
 @login_required
-def get_game_state(game_id):
-    reload(flowmodel)
+def get_game_state(game_id,last_time):
     print("GETTING GAME STATE")
     game = db.session.query(Game).filter_by(id=game_id).first()
     if current_user not in game.users:
         print("USER NOT IN GAME")
         return jsonify({"error":"user is not in game"})
+    if game.status=="closed":
+        return jsonify({"error":"game_closed"})
     state = json.loads(game.state)
+    if state["time"]<=int(last_time):
+        return jsonify({"error":"stale_state"})
     flowstate = flowmodel.from_state(state)
     print("RETURNING GAME")
     return jsonify({"game_id":game_id,"user_id":str(current_user.id),"state":flowstate.state})
@@ -130,7 +134,7 @@ def join(game_id):
     state = json.loads(game.state)
 
     players = ["player1","player2"]
-    existing = state["players"].values()[0]["player_key"]
+    existing = list(state["players"].values())[0]["player_key"]
     players.remove(existing)
     state["players"][str(current_user.id)] = {"user_id":str(current_user.id),"player_key":players[0]}
 
@@ -139,7 +143,7 @@ def join(game_id):
     game.users.append(current_user)
     db.session.add(game)
     db.session.commit()
-    return redirect(url_for("get_game_state",game_id=game.id))
+    return redirect(url_for("get_game_state",game_id=game.id,last_time=-1))
 
 @app.route('/concede/<int:game_id>')
 @login_required
@@ -158,7 +162,6 @@ def concede(game_id):
 @app.route('/action/<string:action>/<int:game_id>/<int:card_id>/<string:space_id>')
 @login_required
 def action(action,game_id,card_id,space_id):
-    reload(flowmodel)
     game = db.session.query(Game).filter_by(id=game_id).first()
     if current_user not in game.users:
         return jsonify({"error":"user is not in game"})
@@ -170,13 +173,13 @@ def action(action,game_id,card_id,space_id):
     try:
         m.get_object(card_id).action(action,m.get_object(space_id))
     except flowmodel.ModelError as exc:
-        return jsonify({"error":"invalid manipulation","message":exc.message,"type":str(type(exc))})
+        return jsonify({"error":"invalid manipulation","message":exc.args,"type":str(type(exc))})
     m.world.end_turn()
     game.state = json.dumps(m.state)
     game.updated = datetime.now()
     db.session.add(game)
     db.session.commit()
-    return redirect(url_for("get_game_state",game_id=game.id))
+    return redirect(url_for("get_game_state",game_id=game.id,last_time=-1))
 
 # Views
 @app.route('/')

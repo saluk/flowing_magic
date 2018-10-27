@@ -127,6 +127,8 @@ class Card(Thing):
         self.model.move_to_space(self.key, space.key)
     @operation
     def draw(self, space):
+        if self.location["type"]!="deck":
+            raise InvalidManipulation("You must draw from a deck")
         self.model.move_to_space(self.key, space.key)
 
 @add_type("world")
@@ -136,6 +138,7 @@ class World(Blob):
         players = ["player1","player2"]
         players.remove(self.state_dict["current_player"])
         self.state_dict["current_player"] = players[0]
+        self.model.build_index()
 
 @add_type("player")
 class Player(Blob):
@@ -243,8 +246,8 @@ def newgame():
                 "things":[
                 ],
                 "rows":[
-                    ["red", "blue", "yellow", "black"],
-                    ["red", "blue", "yellow", "black"]
+                    ["red", "blue", "green", "black"],
+                    ["red", "blue", "green", "black"]
                 ]
             }
         ]
@@ -256,7 +259,7 @@ def newgame():
                     "key": card_key[0],
                     "type": "card",
                     "back": "1",   #Which back to show
-                    "color": random.choice(["red","blue","yellow","black","white"])
+                    "color": random.choice(["red","blue","green","black"])
                 }
     m = GameModel(state)
     for player in ["deck1","deck2"]:
