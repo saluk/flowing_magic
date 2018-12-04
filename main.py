@@ -720,6 +720,7 @@ class GameCard(GameCardPreview):
     def get_preview(self):
         p = GameCardPreview(source=self.source)
         p.thing = self.thing
+        p.show_back = self.show_back
         return p
     def on_touch_up(self, touch):
         if super(GameCard, self).on_touch_down(touch):
