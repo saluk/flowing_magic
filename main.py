@@ -89,6 +89,7 @@ class Network(object):
                     on_error=_on_error,
                     on_failure=_on_failure,
                     req_headers={"Cookie":submit_cookies})
+
 network = Network()
 
 class EntryField(BoxLayout):
@@ -139,11 +140,18 @@ class MainMenu(Widget):
         bl.add_widget(self.emailbox)
         self.passwordbox = EntryField(text=self.password, label="Password:", id="passwordbox", password=True)
         bl.add_widget(self.passwordbox)
+
         self.login = Button(text="Login",height=50,size_hint_y=None)
         self.login.bind(on_press=self.do_login)
         bl.add_widget(self.login)
-        bl.pos = [0, self.height-bl.height*2]
+
+        self.hotseat = Button(text="Start Hotseat Game",height=50,size_hint_y=None)
+        self.hotseat.bind(on_press=self.do_hotseat)
+        bl.add_widget(self.hotseat)
+
+        #bl.pos = [0, self.height-bl.height*2]
         self.bl = bl
+        
     def show_games(self):
         self.current_mode = self.show_games
         self.clear_widgets()
@@ -186,6 +194,10 @@ class MainMenu(Widget):
             self.show_games()
         network.get_request("/loginclient",on_success,data={"email":self.emailbox.ids.inp.text,
                                                             "password":self.passwordbox.ids.inp.text})
+    def do_hotseat(self, *args):
+        self.user_id = None
+        self.game_id = None
+        self.activate_game()
     def new_game(self, button):
         def on_success(data):
             self.activate_game(game_id=data["game_id"])
@@ -208,9 +220,8 @@ class MainMenu(Widget):
             game_id = button.game_id
         if game_id:
             self.game_id = game_id
-            self.last_state = None
         self.clear_widgets()
-        gv = GameView(self.last_state)
+        gv = GameView()
         gv.user_id = self.user_id
         gv.game_id = self.game_id
         gv.last_time = -1
@@ -240,9 +251,9 @@ class Animations(object):
             a[1].start(a[0])
 
 class GameView(Widget):
-    def __init__(self, last_state= None, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super(GameView,self).__init__(*args, **kwargs)
-        self.state = last_state
+        self.state = None
         self.schedule_update = None
 
         #self.music = MusicSDL2()
@@ -252,6 +263,8 @@ class GameView(Widget):
         self.animations = Animations()
         self.space_objects = []
     def get_server_state(self, dt=0, force=False):
+        if not self.game_id:
+            return self.get_hotseat_state()
         def on_success(data, force=force):
             if data.get("error",None)=="game_closed":
                 self.root.opponent_concedes()
@@ -276,7 +289,18 @@ class GameView(Widget):
                 self.build_world()
             self.adapt_model_sync(self.state)
         network.get_request("/game/%s/%s"%(self.game_id,self.last_time), on_success)
-
+    def get_hotseat_state(self):
+        if not self.state:
+            self.user_id = 0
+            user_id2 = 1
+            self.state = model.newgame()
+            self.state.add_player(self.user_id)
+            self.state.add_player(user_id2)
+            self.your_player = "player1"
+            self.their_player = "player2"
+            self.build_world()
+            self.adapt_model_sync(self.state)
+        return self.state
     def add_sync_widget(self, widget, match):
         self.add_widget(widget)
         widget.match = match
@@ -296,6 +320,9 @@ class GameView(Widget):
                 return space_object
 
     def build_world(self):
+        self.clear_widgets()
+        self.space_objects = []
+
         self.play_area = PlayArea(self)
         self.add_sync_widget(self.play_area, {"key":"flowarea"})
 
@@ -398,17 +425,27 @@ class GameView(Widget):
         print("ACTION FAILED?",failed)
         if failed:
             return False
-        #self.adapt_model_sync(self.state)
         #SERVER
         print("ACTION SUCCESSFUL")
-        def on_success(data):
-            if "error" in data:
-                self.get_server_state(force=True)
-                return
-            self.state = model.from_state(data["state"])
-            self.adapt_model_sync(self.state)
-        network.get_request("/action/%s/%s/%s/%s/%s"%(action,self.game_id,thing1_key,thing2_key,spot),on_success)
+        self.commit_action(action, thing1_key, thing2_key, spot)
         return True
+    def commit_action(self, action, thing1_key, thing2_key, spot):
+        if self.game_id: #NETWORK
+            def on_success(data):
+                if "error" in data:
+                    self.get_server_state(force=True)
+                    return
+                self.state = model.from_state(data["state"])
+                self.adapt_model_sync(self.state)
+            network.get_request("/action/%s/%s/%s/%s/%s"%(action,self.game_id,thing1_key,thing2_key,spot),on_success)
+        else: #HOTSEAT
+            if action=="end_turn":
+                print("players:",self.user_id,self.your_player,self.their_player)
+                self.your_player,self.their_player = self.their_player,self.your_player
+                self.user_id = int(self.state.get_player(self.your_player)["user_id"])
+                print("players:",self.user_id,self.your_player,self.their_player)
+                self.build_world()
+            self.adapt_model_sync(self.state)
     def end_turn(self, *args):
         return self.handle_action("end_turn","world","world")
     def adapt_model_sync(self, flowmodel):
@@ -620,10 +657,15 @@ class Deck(CardSpace):
         return True
     def resize_card_spacing(self):
         width = len(self.cards)*CARD_SIZE[0]
+        spacing = float(20)/float(min(len(self.cards),6))
+        print("spacing:",spacing)
+        i = 0
         for card in self.cards:
-            card.dest_x = self.x+random.randint(-10,10)
-            card.dest_y = self.y+random.randint(-10,10)
+            card.dest_x = self.x+i*spacing
+            card.dest_y = self.y-i*spacing
             card.speed = 0
+            i+=1
+            if i>6: i = 6
     def on_touch_down(self, touch):
         if super(Deck, self).on_touch_down(touch):
             return True
@@ -631,7 +673,7 @@ class Deck(CardSpace):
             return False
         if not self.cards:
             return False
-        self.view.show_card_preview(self.cards[-1].source)
+        #self.view.show_card_preview(self.cards[-1].source)
         if not self.is_owned:
             return False
         if self.view.dragging:

@@ -1,0 +1,3 @@
+ - hotseat mode
+ - bot mode
+ - dont play cards directly from deck? flip cards as they come out from the deck?
